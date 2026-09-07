@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/asokitchen/backend/internal/middleware"
 	"github.com/asokitchen/backend/internal/models"
 	"github.com/asokitchen/backend/internal/websocket"
 )
@@ -32,7 +33,10 @@ type createOrderItemInput struct {
 }
 
 type createOrderRequest struct {
-	UserID          uuid.UUID              `json:"user_id"`
+	// NOTE: no UserID field here on purpose. Before, a client could place
+	// an order as literally any user by typing their UUID into the body.
+	// The real user_id now comes from the verified JWT (see CreateOrder
+	// below), never from something the client can type.
 	OrderType       models.OrderType       `json:"order_type"`
 	ScheduledFor    *time.Time             `json:"scheduled_for,omitempty"` // nil = ASAP order
 	DeliveryAddress string                 `json:"delivery_address,omitempty"`
@@ -40,8 +44,14 @@ type createOrderRequest struct {
 	Items           []createOrderItemInput `json:"items"`
 }
 
-// POST /api/orders
+// POST /api/orders — requires authentication (RequireAuth middleware).
 func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	var req createOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -109,7 +119,7 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		INSERT INTO orders (id, user_id, order_type, status, scheduled_for,
 		                     delivery_address, subtotal_amount, total_amount, notes)
 		VALUES ($1, $2, $3, 'pending', $4, $5, $6, $6, $7)`,
-		orderID, req.UserID, req.OrderType, req.ScheduledFor,
+		orderID, userID, req.OrderType, req.ScheduledFor,
 		req.DeliveryAddress, subtotal, req.Notes)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create order")
@@ -188,7 +198,7 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 
 type updateStatusRequest struct {
 	Status models.OrderStatus `json:"status"`
-	Note   string              `json:"note,omitempty"`
+	Note   string             `json:"note,omitempty"`
 }
 
 // PATCH /api/orders/{orderID}/status

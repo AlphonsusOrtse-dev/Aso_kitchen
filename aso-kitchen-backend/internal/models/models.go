@@ -47,6 +47,15 @@ const (
 	OrderTypeDelivery OrderType = "delivery"
 )
 
+// Role mirrors the Postgres `user_role` enum.
+type Role string
+
+const (
+	RoleCustomer Role = "customer"
+	RoleStaff    Role = "staff"
+	RoleAdmin    Role = "admin"
+)
+
 type User struct {
 	ID        uuid.UUID `json:"id"`
 	FullName  string    `json:"full_name"`
