@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
 	"github.com/asokitchen/backend/internal/config"
 	"github.com/asokitchen/backend/internal/database"
 	"github.com/asokitchen/backend/internal/handlers"
+	authmw "github.com/asokitchen/backend/internal/middleware"
+	"github.com/asokitchen/backend/internal/models"
 	"github.com/asokitchen/backend/internal/websocket"
 )
 
@@ -33,13 +35,14 @@ func main() {
 
 	menuHandler := handlers.NewMenuHandler(pool)
 	orderHandler := handlers.NewOrderHandler(pool, hub)
+	authHandler := handlers.NewAuthHandler(pool, cfg.JWTSecret)
 
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(15 * time.Second))
+	r.Use(chimiddleware.RequestID)
+	r.Use(chimiddleware.RealIP)
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.Timeout(15 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		// Restrict this to your actual web + mobile app origins in production.
 		AllowedOrigins:   []string{"*"},
@@ -55,14 +58,28 @@ func main() {
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		// Menu
+		// ---------- Public routes: no token required ----------
+		r.Post("/signup", authHandler.Signup)
+		r.Post("/login", authHandler.Login)
 		r.Get("/menu", menuHandler.ListMenu)
-		r.Patch("/menu/{itemID}/stock", menuHandler.ToggleStock)
 
-		// Orders
-		r.Post("/orders", orderHandler.CreateOrder)
-		r.Get("/orders/{orderID}", orderHandler.GetOrder)
-		r.Patch("/orders/{orderID}/status", orderHandler.UpdateOrderStatus)
+		// ---------- Protected routes: valid JWT required ----------
+		r.Group(func(r chi.Router) {
+			r.Use(authmw.RequireAuth(cfg.JWTSecret))
+
+			// Any authenticated user (customer, staff, or admin) can place
+			// and view their own orders.
+			r.Post("/orders", orderHandler.CreateOrder)
+			r.Get("/orders/{orderID}", orderHandler.GetOrder)
+
+			// Staff/admin only: updating order status and toggling stock
+			// are kitchen-side operations, not customer actions.
+			r.Group(func(r chi.Router) {
+				r.Use(authmw.RequireRole(string(models.RoleStaff), string(models.RoleAdmin)))
+				r.Patch("/orders/{orderID}/status", orderHandler.UpdateOrderStatus)
+				r.Patch("/menu/{itemID}/stock", menuHandler.ToggleStock)
+			})
+		})
 	})
 
 	// Live order tracking

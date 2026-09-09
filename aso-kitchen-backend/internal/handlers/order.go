@@ -150,9 +150,16 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- Get order ----------
-
-// GET /api/orders/{orderID}
+// GET /api/orders/{orderID} — requires authentication.
+// Customers may only view their own orders; staff/admin may view any order.
 func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
+	requesterID, ok := middleware.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	requesterRole, _ := middleware.RoleFromContext(r.Context())
+
 	orderID, err := uuid.Parse(chi.URLParam(r, "orderID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid order id")
@@ -172,6 +179,15 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load order")
+		return
+	}
+
+	isOwner := o.UserID == requesterID
+	isStaff := requesterRole == string(models.RoleStaff) || requesterRole == string(models.RoleAdmin)
+	if !isOwner && !isStaff {
+		// 404 rather than 403 here: we don't want to confirm to a snooping
+		// customer that an order with this ID even exists.
+		writeError(w, http.StatusNotFound, "order not found")
 		return
 	}
 
